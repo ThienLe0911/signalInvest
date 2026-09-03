@@ -10,12 +10,23 @@ import {
 } from "../lib/market";
 
 describe("market helpers & analytics", () => {
-  it("normalizes the first point to zero", () => {
+  it("normalizes the first point to zero and preserves history dates/values", () => {
     expect(normalizePerformance([100, 110])).toEqual([
       { index: 0, value: 0 },
       { index: 1, value: 10 }
     ]);
     expect(normalizePerformance([])).toEqual([]);
+
+    // Kiểm tra khi có truyền history points
+    const history = [
+      { date: "31/08", value: 148.7 },
+      { date: "03/09", value: 147.4 }
+    ];
+    const resWithHistory = normalizePerformance([148.7, 147.4], history);
+    expect(resWithHistory).toEqual([
+      { index: 0, value: 0, date: "31/08", rawValue: 148.7 },
+      { index: 1, value: -0.87, date: "03/09", rawValue: 147.4 }
+    ]);
   });
 
   it("flags old observations as stale and recent as fresh", () => {

@@ -2,6 +2,11 @@ export type Freshness = "fresh" | "delayed" | "stale";
 
 export type AssetCategory = "precious_metals" | "currencies" | "equities" | "real_estate" | "crypto" | "macro";
 
+export type HistoryPoint = {
+  date: string;
+  value: number;
+};
+
 export type Asset = {
   id: string;
   name: string;
@@ -15,6 +20,7 @@ export type Asset = {
   sourceUrl: string;
   freshness: Freshness;
   series: number[];
+  history?: HistoryPoint[];
   unavailable?: boolean;
   unavailableReason?: string;
 };
@@ -306,13 +312,30 @@ export const insight: Insight = {
   limitations: "Báo cáo phân tích chiến lược được xây dựng từ dữ liệu thị trường thực tế kết hợp mô hình định lượng. Không phải tư vấn đầu tư cá nhân hoá; nhà đầu tư tự chịu trách nhiệm cho các quyết định của mình."
 };
 
-export function normalizePerformance(series: number[]) {
+export type NormalizedPoint = {
+  index: number;
+  value: number;
+  date?: string;
+  rawValue?: number;
+};
+
+export function normalizePerformance(
+  series: number[],
+  history?: HistoryPoint[]
+): NormalizedPoint[] {
   if (!series || !series.length || series[0] === 0) return [];
   const base = series[0];
-  return series.map((value, index) => ({
-    index,
-    value: Number((((value / base) - 1) * 100).toFixed(2))
-  }));
+  return series.map((value, index) => {
+    const point: NormalizedPoint = {
+      index,
+      value: Number((((value / base) - 1) * 100).toFixed(2))
+    };
+    if (history && history[index]) {
+      point.date = history[index].date;
+      point.rawValue = history[index].value;
+    }
+    return point;
+  });
 }
 
 export function getFreshnessStatus(observedAt: string, nowAt = new Date()): Freshness {

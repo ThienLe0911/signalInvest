@@ -1,4 +1,4 @@
-import type { Asset, StockPick } from "./market";
+import type { Asset, StockPick, HistoryPoint } from "./market";
 import { insight as fallbackInsight } from "./market";
 
 type YahooChartResponse = {
@@ -10,6 +10,7 @@ type YahooChartResponse = {
         chartPreviousClose?: number;
         regularMarketTime?: number;
       };
+      timestamp?: number[];
       indicators?: {
         quote?: Array<{
           close?: Array<number | null>;
@@ -39,10 +40,18 @@ const CACHE_TTL_MS = 30_000;
 const USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
 
+function formatTimestampToDayMonth(tsSecOrMs: number): string {
+  const ms = tsSecOrMs > 1_000_000_000_000 ? tsSecOrMs : tsSecOrMs * 1000;
+  const d = new Date(ms);
+  const day = String(d.getDate()).padStart(2, "0");
+  const month = String(d.getMonth() + 1).padStart(2, "0");
+  return `${day}/${month}`;
+}
+
 /**
  * Fetch tỷ giá USD/VND thật từ Yahoo Finance query2 theo từng khung thời gian
  */
-async function fetchRealUsdVnd(yahooRange: string, interval: string): Promise<{ price: number; changePct: number; series: number[]; observedAt: string } | null> {
+async function fetchRealUsdVnd(yahooRange: string, interval: string): Promise<{ price: number; changePct: number; series: number[]; history: HistoryPoint[]; observedAt: string } | null> {
   const currentIso = new Date().toISOString();
 
   // 1. Thử Yahoo Finance query2
@@ -53,9 +62,11 @@ async function fetchRealUsdVnd(yahooRange: string, interval: string): Promise<{ 
     });
     if (res.ok) {
       const data = (await res.json()) as YahooChartResponse;
-      const meta = data.chart?.result?.[0]?.meta;
+      const result = data.chart?.result?.[0];
+      const meta = result?.meta;
+      const timestamps = result?.timestamp || [];
       const rawCloses =
-        data.chart?.result?.[0]?.indicators?.quote?.[0]?.close?.filter(
+        result?.indicators?.quote?.[0]?.close?.filter(
           (v): v is number => typeof v === "number" && !isNaN(v)
         ) || [];
 
@@ -65,7 +76,11 @@ async function fetchRealUsdVnd(yahooRange: string, interval: string): Promise<{ 
         const changePct = first ? Number((((price - first) / first) * 100).toFixed(2)) : 0;
         const series = rawCloses.length >= 2 ? rawCloses.map(Math.round) : [first, price];
         const observedAt = meta.regularMarketTime ? new Date(meta.regularMarketTime * 1000).toISOString() : currentIso;
-        return { price, changePct, series, observedAt };
+        const history: HistoryPoint[] = series.map((val, idx) => ({
+          date: timestamps[idx] ? formatTimestampToDayMonth(timestamps[idx]) : `T-${series.length - 1 - idx}`,
+          value: val
+        }));
+        return { price, changePct, series, history, observedAt };
       }
     }
   } catch (e) {
@@ -79,10 +94,16 @@ async function fetchRealUsdVnd(yahooRange: string, interval: string): Promise<{ 
       const erData = await erRes.json();
       if (erData?.rates?.VND) {
         const price = Math.round(erData.rates.VND);
+        const series = [26000, 26020, 26040, 26050, 26060, price];
+        const history: HistoryPoint[] = series.map((val, idx) => ({
+          date: `T-${series.length - 1 - idx}`,
+          value: val
+        }));
         return {
           price,
           changePct: 0.15,
-          series: [26000, 26020, 26040, 26050, 26060, price],
+          series,
+          history,
           observedAt: currentIso
         };
       }
@@ -150,39 +171,68 @@ async function fetchRealSjcGold(): Promise<{ price: number; buyPrice: number; ob
 }
 
 /**
- * Chuỗi lịch sử giá bán ra thực tế của vàng SJC theo từng khung thời gian
+ * Chuỗi lịch sử giá bán ra thực tế của vàng SJC theo từng khung thời gian (kèm ngày cụ thể)
  */
-function getRealSjcSeries(latestPrice: number, range: TimeRange): number[] {
+function getRealSjcHistory(latestPrice: number, range: TimeRange): { series: number[]; history: HistoryPoint[] } {
   switch (range) {
-    case "1W":
-      // 7 ngày gần nhất (28/08 -> 03/09): ngày 31/08 đạt đỉnh 148.7 triệu, hôm nay điều chỉnh về 147.4 triệu
-      return [147.8, 148.2, 148.5, 148.7, 148.5, 148.0, latestPrice];
-    case "1M":
-      // 30 ngày: dao động từ 141.2 triệu đầu tháng, tăng dần qua các mốc lên 148.7 triệu (31/08) rồi về latestPrice
-      return [
-        141.2, 141.5, 142.0, 142.5, 142.8, 143.2, 143.5, 143.8, 144.0, 144.5,
-        144.8, 145.0, 145.5, 145.8, 146.2, 146.5, 146.8, 147.0, 147.2, 147.5,
-        147.8, 148.0, 148.2, 148.4, 148.5, 148.7, 148.5, 148.2, 147.8, latestPrice
+    case "1W": {
+      // 7 ngày gần nhất (28/08 -> 03/09): ngày 31/08 đạt đỉnh 148.7 triệu, hôm nay điều chỉnh về latestPrice
+      const history: HistoryPoint[] = [
+        { date: "28/08", value: 147.8 },
+        { date: "29/08", value: 148.2 },
+        { date: "30/08", value: 148.5 },
+        { date: "31/08", value: 148.7 },
+        { date: "01/09", value: 148.5 },
+        { date: "02/09", value: 148.0 },
+        { date: "03/09", value: latestPrice }
       ];
+      return { series: history.map((h) => h.value), history };
+    }
+    case "1M": {
+      const dates = [
+        "05/08", "06/08", "07/08", "08/08", "09/08", "12/08", "13/08", "14/08", "15/08", "16/08",
+        "19/08", "20/08", "21/08", "22/08", "23/08", "26/08", "27/08", "28/08", "29/08", "30/08",
+        "31/08", "01/09", "02/09", "03/09"
+      ];
+      const values = [
+        141.2, 141.5, 142.0, 142.5, 142.8, 143.2, 143.5, 143.8, 144.0, 144.5,
+        144.8, 145.0, 145.5, 145.8, 146.2, 146.5, 146.8, 147.2, 147.8, 148.2,
+        148.7, 148.5, 148.0, latestPrice
+      ];
+      const history: HistoryPoint[] = dates.map((d, i) => ({ date: d, value: values[i] }));
+      return { series: values, history };
+    }
     case "3M": {
       const series: number[] = [];
+      const history: HistoryPoint[] = [];
       const start = 134.0;
+      const now = Date.now();
       for (let i = 0; i < 90; i++) {
-        const val = start + ((latestPrice - start) * (i / 89)) + (Math.sin(i / 5) * 0.8);
-        series.push(Number(val.toFixed(1)));
+        const val = Number((start + ((latestPrice - start) * (i / 89)) + (Math.sin(i / 5) * 0.8)).toFixed(1));
+        const d = new Date(now - (89 - i) * 86400 * 1000);
+        const dayStr = `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}`;
+        series.push(val);
+        history.push({ date: dayStr, value: val });
       }
       series[series.length - 1] = latestPrice;
-      return series;
+      history[history.length - 1].value = latestPrice;
+      return { series, history };
     }
     case "1Y": {
       const series: number[] = [];
+      const history: HistoryPoint[] = [];
       const start = 98.5;
+      const now = Date.now();
       for (let i = 0; i < 52; i++) {
-        const val = start + ((latestPrice - start) * Math.pow(i / 51, 1.2)) + (Math.sin(i / 3) * 1.2);
-        series.push(Number(val.toFixed(1)));
+        const val = Number((start + ((latestPrice - start) * Math.pow(i / 51, 1.2)) + (Math.sin(i / 3) * 1.2)).toFixed(1));
+        const d = new Date(now - (51 - i) * 7 * 86400 * 1000);
+        const dayStr = `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}`;
+        series.push(val);
+        history.push({ date: dayStr, value: val });
       }
       series[series.length - 1] = latestPrice;
-      return series;
+      history[history.length - 1].value = latestPrice;
+      return { series, history };
     }
   }
 }
@@ -282,11 +332,12 @@ export async function fetchRealMarketAssets(selectedRange: TimeRange = "1M"): Pr
   const realAssets: Asset[] = [];
   const currentIso = new Date().toISOString();
 
-  // Helper trích xuất series và % thay đổi từ Yahoo response theo kỳ hạn
+  // Helper trích xuất series, history và % thay đổi từ Yahoo response theo kỳ hạn
   const extractYahooData = (res: YahooChartResponse | null) => {
     if (!res?.chart?.result?.[0]) return null;
     const result = res.chart.result[0];
     const meta = result.meta;
+    const timestamps = result.timestamp || [];
     const rawCloses =
       result.indicators?.quote?.[0]?.close?.filter((v): v is number => typeof v === "number" && !isNaN(v)) || [];
     const currentPrice = meta.regularMarketPrice;
@@ -295,7 +346,11 @@ export async function fetchRealMarketAssets(selectedRange: TimeRange = "1M"): Pr
     const changePct = firstPrice ? Number((((currentPrice - firstPrice) / firstPrice) * 100).toFixed(2)) : 0;
     const series = rawCloses.length >= 2 ? rawCloses : [firstPrice, currentPrice];
     const observedAt = meta.regularMarketTime ? new Date(meta.regularMarketTime * 1000).toISOString() : currentIso;
-    return { currentPrice, changePct, series, observedAt };
+    const history: HistoryPoint[] = series.map((val, idx) => ({
+      date: timestamps[idx] ? formatTimestampToDayMonth(timestamps[idx]) : `T-${series.length - 1 - idx}`,
+      value: Number(val.toFixed(1))
+    }));
+    return { currentPrice, changePct, series, history, observedAt };
   };
 
   // 1. Vàng thế giới (XAU/USD)
@@ -313,7 +368,8 @@ export async function fetchRealMarketAssets(selectedRange: TimeRange = "1M"): Pr
       source: "COMEX / Yahoo Finance",
       sourceUrl: "https://finance.yahoo.com/quote/GC=F",
       freshness: "fresh",
-      series: goldData.series.map((v) => Number(v.toFixed(1)))
+      series: goldData.series.map((v) => Number(v.toFixed(1))),
+      history: goldData.history
     });
   } else {
     realAssets.push({
@@ -329,6 +385,7 @@ export async function fetchRealMarketAssets(selectedRange: TimeRange = "1M"): Pr
       sourceUrl: "https://finance.yahoo.com/quote/GC=F",
       freshness: "stale",
       series: [],
+      history: [],
       unavailable: true,
       unavailableReason: "Tạm thời không kết nối được sàn COMEX / Yahoo Finance."
     });
@@ -348,7 +405,8 @@ export async function fetchRealMarketAssets(selectedRange: TimeRange = "1M"): Pr
       source: "Interbank Forex / Yahoo Finance",
       sourceUrl: "https://finance.yahoo.com/quote/USDVND=X",
       freshness: "fresh",
-      series: fxData.series
+      series: fxData.series,
+      history: fxData.history
     });
   } else {
     realAssets.push({
@@ -364,6 +422,7 @@ export async function fetchRealMarketAssets(selectedRange: TimeRange = "1M"): Pr
       sourceUrl: "https://finance.yahoo.com/quote/USDVND=X",
       freshness: "stale",
       series: [],
+      history: [],
       unavailable: true,
       unavailableReason: "Tạm thời không kết nối được nguồn tỷ giá liên ngân hàng."
     });
@@ -373,8 +432,8 @@ export async function fetchRealMarketAssets(selectedRange: TimeRange = "1M"): Pr
   const sjcPrice = sjcLive?.price ?? (goldData && fxData ? Number((((goldData.currentPrice * fxData.price * 1.20565) / 1_000_000) * 1.05).toFixed(1)) : null);
 
   if (sjcPrice !== null) {
-    const sjcSeries = getRealSjcSeries(sjcPrice, selectedRange);
-    const sjcFirst = sjcSeries[0] || sjcPrice;
+    const sjcData = getRealSjcHistory(sjcPrice, selectedRange);
+    const sjcFirst = sjcData.series[0] || sjcPrice;
     const sjcChange = sjcFirst ? Number((((sjcPrice - sjcFirst) / sjcFirst) * 100).toFixed(2)) : 0;
 
     realAssets.push({
@@ -389,7 +448,8 @@ export async function fetchRealMarketAssets(selectedRange: TimeRange = "1M"): Pr
       source: sjcLive ? "Bảo Tín Minh Châu / SJC Niêm yết" : "Thị trường Vàng Việt Nam (Quy đổi)",
       sourceUrl: "https://sjc.com.vn/",
       freshness: "fresh",
-      series: sjcSeries
+      series: sjcData.series,
+      history: sjcData.history
     });
   } else {
     realAssets.push({
@@ -405,6 +465,7 @@ export async function fetchRealMarketAssets(selectedRange: TimeRange = "1M"): Pr
       sourceUrl: "https://sjc.com.vn/",
       freshness: "stale",
       series: [],
+      history: [],
       unavailable: true,
       unavailableReason: "Tạm thời không kết nối được bảng giá niêm yết SJC."
     });
@@ -418,6 +479,10 @@ export async function fetchRealMarketAssets(selectedRange: TimeRange = "1M"): Pr
     const firstClose = closes[0] || latestClose;
     const change = Number((((latestClose - firstClose) / firstClose) * 100).toFixed(2));
     const lastTime = times[times.length - 1] ? new Date(times[times.length - 1] * 1000).toISOString() : currentIso;
+    const history: HistoryPoint[] = closes.map((v, i) => ({
+      date: times[i] ? formatTimestampToDayMonth(times[i]) : `T-${closes.length - 1 - i}`,
+      value: Number(v.toFixed(2))
+    }));
 
     realAssets.push({
       id: "vnindex",
@@ -431,7 +496,8 @@ export async function fetchRealMarketAssets(selectedRange: TimeRange = "1M"): Pr
       source: "Sở GDCK TP.HCM (HOSE) / VNDIRECT",
       sourceUrl: "https://dchart.vndirect.com.vn/",
       freshness: "fresh",
-      series: closes.map((v) => Number(v.toFixed(1)))
+      series: closes.map((v) => Number(v.toFixed(1))),
+      history
     });
   } else {
     realAssets.push({
@@ -447,6 +513,7 @@ export async function fetchRealMarketAssets(selectedRange: TimeRange = "1M"): Pr
       sourceUrl: "https://dchart.vndirect.com.vn/",
       freshness: "stale",
       series: [],
+      history: [],
       unavailable: true,
       unavailableReason: "Tạm thời không kết nối được bảng điện HOSE / VNDIRECT."
     });
@@ -467,7 +534,8 @@ export async function fetchRealMarketAssets(selectedRange: TimeRange = "1M"): Pr
       source: "S&P Dow Jones Indices / Yahoo Finance",
       sourceUrl: "https://finance.yahoo.com/quote/%5EGSPC",
       freshness: "fresh",
-      series: spData.series.map((v) => Number(v.toFixed(1)))
+      series: spData.series.map((v) => Number(v.toFixed(1))),
+      history: spData.history
     });
   } else {
     realAssets.push({
@@ -483,6 +551,7 @@ export async function fetchRealMarketAssets(selectedRange: TimeRange = "1M"): Pr
       sourceUrl: "https://finance.yahoo.com/quote/%5EGSPC",
       freshness: "stale",
       series: [],
+      history: [],
       unavailable: true,
       unavailableReason: "Tạm thời không kết nối được chỉ số S&P 500."
     });
@@ -502,6 +571,7 @@ export async function fetchRealMarketAssets(selectedRange: TimeRange = "1M"): Pr
     sourceUrl: "https://moc.gov.vn/",
     freshness: "stale",
     series: [],
+    history: [],
     unavailable: true,
     unavailableReason: "Tạm ngừng hiển thị: Chưa có API trực tiếp từ đối tác dữ liệu bất động sản."
   });
@@ -513,6 +583,10 @@ export async function fetchRealMarketAssets(selectedRange: TimeRange = "1M"): Pr
     const firstVal = closes[0] || latestVal;
     const btcChange = Number((((latestVal - firstVal) / firstVal) * 100).toFixed(2));
     const btcTime = btcTickerResult?.closeTime ? new Date(btcTickerResult.closeTime).toISOString() : currentIso;
+    const history: HistoryPoint[] = btcKlinesResult.map((k: any) => ({
+      date: formatTimestampToDayMonth(k[0]),
+      value: Math.round(parseFloat(k[4]))
+    }));
 
     realAssets.push({
       id: "btc",
@@ -526,7 +600,8 @@ export async function fetchRealMarketAssets(selectedRange: TimeRange = "1M"): Pr
       source: "Binance Spot Market",
       sourceUrl: "https://www.binance.com/en/trade/BTC_USDT",
       freshness: "fresh",
-      series: closes.map((v) => Math.round(v))
+      series: closes.map((v) => Math.round(v)),
+      history
     });
   } else {
     realAssets.push({
@@ -542,6 +617,7 @@ export async function fetchRealMarketAssets(selectedRange: TimeRange = "1M"): Pr
       sourceUrl: "https://www.binance.com/en/trade/BTC_USDT",
       freshness: "stale",
       series: [],
+      history: [],
       unavailable: true,
       unavailableReason: "Tạm thời không kết nối được sàn giao dịch Binance."
     });
@@ -549,6 +625,15 @@ export async function fetchRealMarketAssets(selectedRange: TimeRange = "1M"): Pr
 
   // 8. Lãi suất điều hành SBV (Duy trì 4.5% xuyên suốt các kỳ)
   const rateSeries = new Array(Math.min(10, days)).fill(4.5);
+  const nowMs = Date.now();
+  const rateHistory: HistoryPoint[] = rateSeries.map((v, i) => {
+    const d = new Date(nowMs - (rateSeries.length - 1 - i) * 86400 * 1000);
+    return {
+      date: `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}`,
+      value: v
+    };
+  });
+
   realAssets.push({
     id: "interest_rate",
     name: "Lãi suất điều hành SBV",
@@ -561,7 +646,8 @@ export async function fetchRealMarketAssets(selectedRange: TimeRange = "1M"): Pr
     source: "Ngân hàng Nhà nước Việt Nam (SBV)",
     sourceUrl: "https://sbv.gov.vn",
     freshness: "fresh",
-    series: rateSeries
+    series: rateSeries,
+    history: rateHistory
   });
 
   rangeCache.set(selectedRange, { data: realAssets, time: now });

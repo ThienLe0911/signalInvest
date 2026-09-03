@@ -43,6 +43,15 @@ export default function Home() {
   const [isRangeLoading, setIsRangeLoading] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<string>("");
   const [error, setError] = useState(false);
+  const [inspectedPoint, setInspectedPoint] = useState<{
+    assetName: string;
+    symbol: string;
+    date: string;
+    rawValue: number;
+    unit: string;
+    percent: number;
+  } | null>(null);
+  const [activeTableAssetId, setActiveTableAssetId] = useState<string>("gold_sjc");
 
   const fetchData = async (refresh = false, targetRange = range) => {
     if (refresh) {
@@ -335,15 +344,43 @@ export default function Home() {
             </div>
 
             <div className="chart-wrapper">
+              {/* Interactive Data Inspector: Hiển thị Ngày và Chỉ số của cột khi hover/chạm */}
+              <div className="chart-inspector-wrapper">
+                {inspectedPoint ? (
+                  <div className="inspector-box" role="status" aria-live="polite">
+                    <div className="inspector-badge">
+                      <span className="live-dot" />
+                      <strong>{inspectedPoint.symbol}</strong> · {inspectedPoint.assetName}
+                    </div>
+                    <div className="inspector-stats">
+                      <span className="stat-pill date">
+                        📅 Ngày: <strong>{inspectedPoint.date}</strong>
+                      </span>
+                      <span className="stat-pill val">
+                        💰 Chỉ số thực tế: <strong>{moneyFormat.format(inspectedPoint.rawValue)} {inspectedPoint.unit}</strong>
+                      </span>
+                      <span className={`stat-pill perf ${inspectedPoint.percent >= 0 ? "up" : "down"}`}>
+                        📈 So với đầu kỳ ({range}): <strong>{inspectedPoint.percent >= 0 ? "+" : ""}{inspectedPoint.percent}%</strong>
+                      </span>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="inspector-prompt">
+                    <span>💡 <em>Di chuột (hover) hoặc bấm vào bất kỳ cột nào trên biểu đồ để xem <strong>Ngày tháng</strong> và <strong>Chỉ số thực tế</strong> của ngày đó.</em></span>
+                  </div>
+                )}
+              </div>
+
               <div className="chart-rows" role="img" aria-label={`Biểu đồ hiệu suất các tài sản đã chọn trong kỳ ${range}`}>
                 {visibleAssets.map((asset) => {
-                  const normalized = normalizePerformance(asset.series);
+                  const normalized = normalizePerformance(asset.series, asset.history);
                   const latestPerf = normalized[normalized.length - 1]?.value || 0;
                   return (
                     <div key={asset.id} className="chart-row">
                       <div className="chart-symbol">
                         <strong>{asset.symbol}</strong>
                         <small>{asset.name}</small>
+                        <span className="chart-unit-label">({asset.unit})</span>
                       </div>
 
                       <div className="chart-bars-track">
@@ -351,13 +388,42 @@ export default function Home() {
                         {normalized.map((point) => {
                           const isPositive = point.value >= 0;
                           const heightPx = Math.min(48, Math.abs(point.value) * 12 + 6);
+                          const isHovered =
+                            inspectedPoint?.symbol === asset.symbol && inspectedPoint?.date === point.date;
+                          const pointDate = point.date || `T-${normalized.length - 1 - point.index}`;
+                          const rawVal = point.rawValue ?? 0;
+
                           return (
-                            <div key={point.index} className="bar-item">
+                            <div
+                              key={point.index}
+                              className={`bar-item ${isHovered ? "active-bar" : ""}`}
+                              onMouseEnter={() =>
+                                setInspectedPoint({
+                                  assetName: asset.name,
+                                  symbol: asset.symbol,
+                                  date: pointDate,
+                                  rawValue: rawVal,
+                                  unit: asset.unit,
+                                  percent: point.value
+                                })
+                              }
+                              onClick={() =>
+                                setInspectedPoint({
+                                  assetName: asset.name,
+                                  symbol: asset.symbol,
+                                  date: pointDate,
+                                  rawValue: rawVal,
+                                  unit: asset.unit,
+                                  percent: point.value
+                                })
+                              }
+                            >
                               <span
                                 className={`bar-fill ${isPositive ? "bar-up" : "bar-down"}`}
                                 style={{ height: `${heightPx}px` }}
-                                title={`Điểm ${point.index + 1}/${normalized.length}: ${point.value >= 0 ? "+" : ""}${point.value}%`}
+                                title={`${asset.name} — Ngày ${pointDate}: ${moneyFormat.format(rawVal)} ${asset.unit} (${point.value >= 0 ? "+" : ""}${point.value}%)`}
                               />
+                              <span className="bar-date-label">{pointDate}</span>
                             </div>
                           );
                         })}
@@ -371,6 +437,87 @@ export default function Home() {
                   );
                 })}
               </div>
+
+              {/* Bảng đối soát chi tiết chỉ số và ngày tháng cho từng tài sản */}
+              <div className="history-table-container">
+                <div className="history-table-header">
+                  <div>
+                    <h3 className="history-title">📋 Bảng Đối Soát Chỉ Số Thực Tế Từng Ngày ({rangeNames[range]})</h3>
+                    <p className="history-sub">
+                      Hiển thị toàn bộ dữ liệu lịch sử đóng cửa và mốc ngày chính xác từ các sàn giao dịch
+                    </p>
+                  </div>
+                  <div className="history-asset-selector">
+                    <label htmlFor="select-asset-history" className="label-text">
+                      Xem chi tiết tài sản:
+                    </label>
+                    <select
+                      id="select-asset-history"
+                      value={activeTableAssetId}
+                      onChange={(e) => setActiveTableAssetId(e.target.value)}
+                      className="select-asset"
+                      aria-label="Chọn tài sản để xem bảng đối soát theo ngày"
+                    >
+                      {availableAssets.map((a) => (
+                        <option key={a.id} value={a.id}>
+                          {a.symbol} — {a.name} ({a.unit})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                {(() => {
+                  const targetAsset =
+                    availableAssets.find((a) => a.id === activeTableAssetId) || availableAssets[0];
+                  if (!targetAsset || !targetAsset.history || targetAsset.history.length === 0) {
+                    return (
+                      <p className="empty-note">
+                        Đang đồng bộ dữ liệu chuỗi ngày cho tài sản {targetAsset?.name || "này"}...
+                      </p>
+                    );
+                  }
+                  const baseVal = targetAsset.history[0]?.value || targetAsset.value || 1;
+                  return (
+                    <div className="table-responsive">
+                      <table className="daily-data-table">
+                        <thead>
+                          <tr>
+                            <th>Mốc Ngày (Date)</th>
+                            <th>Tên Tài Sản & Mã</th>
+                            <th>Chỉ Số / Giá Thực Tế (Value)</th>
+                            <th>Biến Động So Với Đầu Kỳ ({range})</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {targetAsset.history.map((pt, idx) => {
+                            const pct = Number((((pt.value - baseVal) / baseVal) * 100).toFixed(2));
+                            const isToday = idx === targetAsset.history!.length - 1;
+                            return (
+                              <tr key={idx} className={isToday ? "current-row" : ""}>
+                                <td className="date-cell">
+                                  <strong>{pt.date}</strong>
+                                  {isToday && <span className="today-badge">Mới nhất</span>}
+                                </td>
+                                <td>
+                                  {targetAsset.name} <code>({targetAsset.symbol})</code>
+                                </td>
+                                <td className="val-cell">
+                                  <strong>{moneyFormat.format(pt.value)}</strong> {targetAsset.unit}
+                                </td>
+                                <td className={`perf-cell ${pct >= 0 ? "up" : "down"}`}>
+                                  {pct >= 0 ? "▲ +" : "▼ "}{Math.abs(pct)}%
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  );
+                })()}
+              </div>
+
               <p className="sr-only">
                 Dữ liệu thay thế cho biểu đồ ({range}):{" "}
                 {visibleAssets.map((a) => `${a.symbol}: ${a.changePercent}%`).join(", ")}

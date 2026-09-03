@@ -37,5 +37,6 @@
 - [x] T4.1 Viết unit test trong `tests/market.test.ts` cho các hàm phân tích tài chính và cảnh báo unavailable.
 - [x] T4.2 Viết test cho endpoint và mô hình dữ liệu phản hồi AI trong `tests/gemini.test.ts`.
 - [x] T4.3 Viết test xác minh dữ liệu thật từ các sàn trong `tests/realMarketData.test.ts`.
-- [x] T4.4 Chạy `npm test` (8/8 passed), `npm run typecheck` và `npm run build` đạt 100%.
+- [x] T4.4 Chạy `npm test` (9/9 passed), `npm run typecheck` và `npm run build` đạt 100%.
 - [x] T4.5 Lập báo cáo nghiệm thu theo `validation.md`.
+- [x] T4.6 **Đẩy toàn bộ mã nguồn lên GitHub:** Khởi tạo git, bảo mật secrets và push thành công lên `https://github.com/ThienLe0911/signalInvest.git`.
